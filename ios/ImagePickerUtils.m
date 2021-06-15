@@ -71,6 +71,28 @@
     return NO;
 }
 
++ (NSString *) getMimeType: (NSString *)extension {
+    NSDictionary *typeMapping = @{
+        @"jpg": @"image/jpeg",
+        @"jpeg": @"image/jpeg",
+        @"png": @"image/png",
+        @"heic": @"image/heic",
+        @"heif": @"image/heif",
+        @"svg": @"image/svg+xml",
+        @"bmp": @"image/bmp",
+        @"gif": @"gif",
+        @"ico": @"image/vnd.microsoft.icon",
+        @"tif": @"image/tiff",
+        @"tiff": @"image/tiff",
+        @"webp": @"image/webp"
+    };
+    NSString *str = [typeMapping objectForKey:extension];
+    if (str != NULL) {
+        return str;
+    }
+    return @"image/jpeg";
+}
+
 + (NSString*) getFileType:(NSData *)imageData
 {
     const uint8_t firstByteJpg = 0xFF;
@@ -81,13 +103,13 @@
     [imageData getBytes:&firstByte length:1];
     switch (firstByte) {
       case firstByteJpg:
-        return @"jpg";
+        return @"jpeg";
       case firstBytePng:
         return @"png";
       case firstByteGif:
         return @"gif";
       default:
-        return @"jpg";
+        return @"jpeg";
     }
 }
 

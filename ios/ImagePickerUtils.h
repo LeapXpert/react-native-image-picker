@@ -14,4 +14,6 @@
 
 + (UIImage*)resizeImage:(UIImage*)image maxWidth:(float)maxWidth maxHeight:(float)maxHeight;
     
++ (NSString *) getMimeType: (NSString *)extension;
+
 @end
