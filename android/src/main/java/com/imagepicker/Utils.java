@@ -18,6 +18,7 @@ import android.os.ParcelFileDescriptor;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.util.Base64;
+import android.util.Log;
 import android.webkit.MimeTypeMap;
 
 import androidx.core.app.ActivityCompat;
@@ -30,11 +31,15 @@ import com.facebook.react.bridge.WritableMap;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 import java.util.UUID;
 
 import static com.imagepicker.ImagePickerModule.*;
@@ -51,13 +56,34 @@ public class Utils {
 
     public static String cameraPermissionDescription = "This library does not require Manifest.permission.CAMERA, if you add this permission in manifest then you have to obtain the same.";
 
-    public static File createFile(Context reactContext, String fileType) {
+
+    public static File createFile(Context reactContext, Uri uri) {
         try {
-            String filename = fileNamePrefix  + UUID.randomUUID() + "." + fileType;
+            String path = uri.getPath();
 
+            Cursor cursor = reactContext.getContentResolver().query(uri, null, null, null, null, null);
+            String filename = null;
+            if (cursor != null && cursor.moveToFirst()) {
+                filename = cursor.getString(cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME));
+            }
+            if (filename == null) {
+                filename = path.substring(path.lastIndexOf("/") + 1);
+            }
+
+            return createFile(reactContext, filename);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        }
+    }
+
+    public static File createFile(Context reactContext, String filename) {
+        try {
             // getCacheDir will auto-clean according to android docs
-            File fileDir = reactContext.getCacheDir();
-
+            File fileDir = new File(reactContext.getCacheDir(), "cache");
+            if (!fileDir.exists()) {
+                fileDir.mkdir();
+            }
             File file = new File(fileDir, filename);
             file.createNewFile();
             return file;
@@ -72,6 +98,52 @@ public class Utils {
         String authority = reactContext.getApplicationContext().getPackageName() + ".imagepickerprovider";
         return FileProvider.getUriForFile(reactContext, authority, file);
     }
+
+
+    public static String getFilePathForN(Uri uri, Context context) throws IOException {
+        Cursor returnCursor = context.getContentResolver().query(uri, null, null, null, null);
+        /*
+         * Get the column indexes of the data in the Cursor,
+         *     * move to the first row in the Cursor, get the data,
+         *     * and display it.
+         * */
+        int nameIndex = returnCursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+        int sizeIndex = returnCursor.getColumnIndex(OpenableColumns.SIZE);
+        returnCursor.moveToFirst();
+        String name = (returnCursor.getString(nameIndex));
+        File cachedFolder = new File(context.getFilesDir(), "cached");
+        if (!cachedFolder.exists()) {
+            boolean success = cachedFolder.mkdirs();
+            if (!success) {
+                throw new IOException("Create folder failed");
+            }
+        }
+        File file = new File(cachedFolder, name);
+        try {
+            InputStream inputStream = context.getContentResolver().openInputStream(uri);
+            FileOutputStream outputStream = new FileOutputStream(file);
+            int read = 0;
+            int maxBufferSize = 1024 * 1024;
+            int bytesAvailable = inputStream.available();
+
+            //int bufferSize = 1024;
+            int bufferSize = Math.min(bytesAvailable, maxBufferSize);
+
+            final byte[] buffers = new byte[bufferSize];
+            while ((read = inputStream.read(buffers)) != -1) {
+                outputStream.write(buffers, 0, read);
+            }
+            inputStream.close();
+            outputStream.close();
+        } catch (Exception e) {
+            Log.e("Exception", e.getMessage());
+            throw e;
+        } finally {
+            returnCursor.close();
+        }
+        return file.getPath();
+    }
+
 
     public static void saveToPublicDirectory(Uri uri, Context context, String mediaType) {
         ContentResolver resolver = context.getContentResolver();
@@ -112,8 +184,7 @@ public class Utils {
             return null;
         }
         ContentResolver contentResolver = context.getContentResolver();
-        String fileType = getFileTypeFromMime(contentResolver.getType(sharedStorageUri));
-        Uri toUri =  Uri.fromFile(createFile(context, fileType));
+        Uri toUri = Uri.fromFile(createFile(context, sharedStorageUri));
         copyUri(sharedStorageUri, toUri, contentResolver);
         return toUri;
     }
@@ -146,7 +217,7 @@ public class Utils {
 
         BitmapFactory.Options options = new BitmapFactory.Options();
         options.inJustDecodeBounds = true;
-        BitmapFactory.decodeStream(inputStream,null, options);
+        BitmapFactory.decodeStream(inputStream, null, options);
         return new int[]{options.outWidth, options.outHeight};
     }
 
@@ -192,20 +263,42 @@ public class Utils {
             int[] newDimens = getImageDimensBasedOnConstraints(origDimens[0], origDimens[1], options);
 
             InputStream imageStream = context.getContentResolver().openInputStream(uri);
-            String mimeType =  getMimeTypeFromFileUri(uri);
+            String mimeType = getMimeTypeFromFileUri(uri);
+            List<String> list = Collections.singletonList("image/heic");
+            if (list.contains(mimeType)) {
+                // prevent resizing if the image is heic
+
+                File file = createFile(context, uri);
+                OutputStream os = context.getContentResolver().openOutputStream(Uri.fromFile(file));
+
+                try {
+                    byte[] buffer = new byte[1024 * 500];
+                    int length;
+                    while ((length = imageStream.read(buffer)) > 0) {
+                        os.write(buffer, 0, length);
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+                return Uri.fromFile(file);
+            }
+
+
             Bitmap b = BitmapFactory.decodeStream(imageStream);
             b = Bitmap.createScaledBitmap(b, newDimens[0], newDimens[1], true);
             String originalOrientation = getOrientation(uri, context);
 
-            File file = createFile(context, getFileTypeFromMime(mimeType));
+            File file = createFile(context, uri);
             OutputStream os = context.getContentResolver().openOutputStream(Uri.fromFile(file));
+
+
             b.compress(getBitmapCompressFormat(mimeType), options.quality, os);
             setOrientation(file, originalOrientation, context);
             return Uri.fromFile(file);
 
         } catch (Exception e) {
             e.printStackTrace();
-            return  null;
+            return null;
         }
     }
 
@@ -248,19 +341,31 @@ public class Utils {
     static double getFileSize(Uri uri, Context context) {
         try {
             ParcelFileDescriptor f = context.getContentResolver().openFileDescriptor(uri, "r");
-            return f.getStatSize();
+            long fileSize = f.getStatSize();
+            if (fileSize == 0) {
+                return new File(uri.getPath()).length();
+            }
+            return fileSize;
         } catch (Exception e) {
             e.printStackTrace();
-            return 0;
+            return new File(uri.getPath()).length();
         }
     }
 
     static int getDuration(Uri uri, Context context) {
-        MediaMetadataRetriever m = new MediaMetadataRetriever();
-        m.setDataSource(context, uri);
-        int duration = Math.round(Float.parseFloat(m.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION))) / 1000;
-        m.release();
-        return duration;
+        try {
+            MediaMetadataRetriever m = new MediaMetadataRetriever();
+            m.setDataSource(context, uri);
+            String duration = m.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+            if (duration == null) {
+                int durationNumberValue = Math.round(Float.parseFloat(duration)) / 1000;
+                m.release();
+                return durationNumberValue;
+            }
+            return 0;
+        } catch (Exception error) {
+            return 0;
+        }
     }
 
     static boolean shouldResizeImage(int origWidth, int origHeight, Options options) {
@@ -277,8 +382,10 @@ public class Utils {
 
     static Bitmap.CompressFormat getBitmapCompressFormat(String mimeType) {
         switch (mimeType) {
-            case "image/jpeg": return Bitmap.CompressFormat.JPEG;
-            case "image/png": return Bitmap.CompressFormat.PNG;
+            case "image/jpeg":
+                return Bitmap.CompressFormat.JPEG;
+            case "image/png":
+                return Bitmap.CompressFormat.PNG;
         }
         return Bitmap.CompressFormat.JPEG;
     }
@@ -288,8 +395,14 @@ public class Utils {
             return "jpg";
         }
         switch (mimeType) {
-            case "image/jpeg": return "jpg";
-            case "image/png": return "png";
+            case "image/jpeg":
+                return "jpg";
+            case "image/png":
+                return "png";
+        }
+        String[] arrOfStr = mimeType.split("/");
+        if (arrOfStr.length > 0) {
+            return arrOfStr[arrOfStr.length - 1];
         }
         return "jpg";
     }
@@ -307,8 +420,10 @@ public class Utils {
         switch (requestCode) {
             case REQUEST_LAUNCH_IMAGE_CAPTURE:
             case REQUEST_LAUNCH_VIDEO_CAPTURE:
-            case REQUEST_LAUNCH_LIBRARY: return true;
-            default: return false;
+            case REQUEST_LAUNCH_LIBRARY:
+                return true;
+            default:
+                return false;
         }
     }
 
@@ -316,13 +431,13 @@ public class Utils {
     // https://issuetracker.google.com/issues/37063818
     public static boolean isCameraPermissionFulfilled(Context context, Activity activity) {
         try {
-             String[] declaredPermissions = context.getPackageManager()
-                     .getPackageInfo(context.getPackageName(), PackageManager.GET_PERMISSIONS)
-                     .requestedPermissions;
+            String[] declaredPermissions = context.getPackageManager()
+                    .getPackageInfo(context.getPackageName(), PackageManager.GET_PERMISSIONS)
+                    .requestedPermissions;
 
-             if (declaredPermissions == null) {
-                 return true;
-             }
+            if (declaredPermissions == null) {
+                return true;
+            }
 
             if (Arrays.asList(declaredPermissions).contains(Manifest.permission.CAMERA)
                     && ActivityCompat.checkSelfPermission(activity, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
@@ -352,7 +467,7 @@ public class Utils {
         int[] dimensions = getImageDimensions(uri, context);
 
         WritableMap map = Arguments.createMap();
-        map.putString("uri", uri.toString());
+        map.putString("uri", uri.getPath());
         map.putDouble("fileSize", getFileSize(uri, context));
         map.putString("fileName", fileName);
         map.putString("type", getMimeTypeFromFileUri(uri));
@@ -368,7 +483,7 @@ public class Utils {
     static ReadableMap getVideoResponseMap(Uri uri, Context context) {
         String fileName = uri.getLastPathSegment();
         WritableMap map = Arguments.createMap();
-        map.putString("uri", uri.toString());
+        map.putString("uri", uri.getPath());
         map.putDouble("fileSize", getFileSize(uri, context));
         map.putInt("duration", getDuration(uri, context));
         map.putString("fileName", fileName);

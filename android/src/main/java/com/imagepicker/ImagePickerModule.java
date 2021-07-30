@@ -16,6 +16,10 @@ import com.facebook.react.bridge.ReadableMap;
 import com.facebook.react.module.annotations.ReactModule;
 
 import java.io.File;
+import java.io.IOException;
+import java.util.UUID;
+
+import okhttp3.internal.Util;
 
 import static com.imagepicker.Utils.*;
 
@@ -84,12 +88,12 @@ public class ImagePickerModule extends ReactContextBaseJavaModule implements Act
             if (this.options.durationLimit > 0) {
                 cameraIntent.putExtra(MediaStore.EXTRA_DURATION_LIMIT, this.options.durationLimit);
             }
-            file = createFile(reactContext, "mp4");
+            file = createFile(reactContext, UUID.randomUUID() + ".mp4");
             cameraCaptureURI = createUri(file, reactContext);
         } else {
             requestCode = REQUEST_LAUNCH_IMAGE_CAPTURE;
             cameraIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
-            file = createFile(reactContext, "jpg");
+            file = createFile(reactContext, UUID.randomUUID() + ".jpg");
             cameraCaptureURI = createUri(file, reactContext);
         }
 
@@ -149,7 +153,13 @@ public class ImagePickerModule extends ReactContextBaseJavaModule implements Act
     }
 
     void onVideoObtained(Uri uri) {
-        callback.invoke(getVideoResponseMap(uri, reactContext));
+        try {
+            String realPath = Utils.getFilePathForN(uri, reactContext);
+            callback.invoke(getVideoResponseMap(Uri.parse(realPath), reactContext));
+        } catch (IOException e) {
+            e.printStackTrace();
+            callback.invoke(getErrorMap(errOthers, e.getMessage()));
+        }
     }
 
     @Override
@@ -198,5 +208,6 @@ public class ImagePickerModule extends ReactContextBaseJavaModule implements Act
     }
 
     @Override
-    public void onNewIntent(Intent intent) { }
+    public void onNewIntent(Intent intent) {
+    }
 }
